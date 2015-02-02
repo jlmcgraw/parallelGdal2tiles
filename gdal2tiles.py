@@ -923,9 +923,10 @@ gdal2tiles temp.vrt""" % self.input)
 
 		self.out_gt = self.out_ds.GetGeoTransform()
 			
-		originX, originY = self.out_gt[0], self.out_gt[3]
-		pixelSizeX, pixelSizeY = self.out_gt[1],self.out_gt[5]
-		pixelSkewX, pixelSkewY = self.out_gt[2], self.out_gt[4]
+		self.originX, self.originY = self.out_gt[0], self.out_gt[3]
+		self.pixelSizeX, self.pixelSizeY = self.out_gt[1],self.out_gt[5]
+		self.pixelSkewX, self.pixelSkewY = self.out_gt[2], self.out_gt[4]
+		print self.originX, self.originY, self.pixelSizeX, self.pixelSizeY, self.pixelSkewX, self.pixelSkewY
 		
 		# Test the size of the pixel
 		
@@ -944,14 +945,14 @@ gdal2tiles temp.vrt""" % self.input)
 		#
 
 		# Output Bounds - coordinates in the output SRS
-		self.ominx = self.out_gt[0]
-		self.omaxx = self.out_gt[0] + self.out_ds.RasterXSize * self.out_gt[1]
-		self.omaxy = self.out_gt[3]
-		self.ominy = self.out_gt[3] - self.out_ds.RasterYSize * self.out_gt[1]
+		self.output_min_x = self.originX
+		self.output_max_x = self.originX + (self.out_ds.RasterXSize * self.pixelSizeX)
+		self.output_max_y = self.out_gt[3]
+		self.output_min_y = self.out_gt[3] - self.out_ds.RasterYSize * self.out_gt[1]
 		# Note: maybe round(x, 14) to avoid the gdal_translate behaviour, when 0 becomes -1e-15
 
 		if self.options.verbose:
-			print("Bounds (output srs):", round(self.ominx, 13), self.ominy, self.omaxx, self.omaxy)
+			print("Bounds (output srs):", round(self.output_min_x, 13), self.output_min_y, self.output_max_x, self.output_max_y)
 
 		#
 		# Calculating ranges for tiles in different zoom levels
@@ -967,8 +968,8 @@ gdal2tiles temp.vrt""" % self.input)
 			# Generate table with min max tile coordinates for all zoomlevels
 			self.tminmax = list(range(0, 32))
 			for tz in range(0, 32):
-				tminx, tminy = self.mercator.MetersToTile(self.ominx, self.ominy, tz)
-				tmaxx, tmaxy = self.mercator.MetersToTile(self.omaxx, self.omaxy, tz)
+				tminx, tminy = self.mercator.MetersToTile(self.output_min_x, self.output_min_y, tz)
+				tmaxx, tmaxy = self.mercator.MetersToTile(self.output_max_x, self.output_max_y, tz)
 				# crop tiles extending world limits (+-180,+-90)
 				tminx, tminy = max(0, tminx), max(0, tminy)
 				tmaxx, tmaxy = min(2 ** tz - 1, tmaxx), min(2 ** tz - 1, tmaxy)
@@ -985,7 +986,7 @@ gdal2tiles temp.vrt""" % self.input)
 				self.tile_max_z = self.mercator.ZoomForPixelSize(self.out_gt[1])
 			
 			if self.options.verbose:
-				print("Bounds (latlong):", self.mercator.MetersToLatLon(self.ominx, self.ominy), self.mercator.MetersToLatLon(self.omaxx, self.omaxy))
+				print("Bounds (latlong):", self.mercator.MetersToLatLon(self.output_min_x, self.output_min_y), self.mercator.MetersToLatLon(self.output_max_x, self.output_max_y))
 				print('MinZoomLevel:', self.tile_min_z)
 				print("MaxZoomLevel:", self.tile_max_z, "(", self.mercator.Resolution(self.tile_max_z), ")")
 
@@ -999,8 +1000,8 @@ gdal2tiles temp.vrt""" % self.input)
 			# Generate table with min max tile coordinates for all zoomlevels
 			self.tminmax = list(range(0, 32))
 			for tz in range(0, 32):
-				tminx, tminy = self.geodetic.LatLonToTile(self.ominx, self.ominy, tz)
-				tmaxx, tmaxy = self.geodetic.LatLonToTile(self.omaxx, self.omaxy, tz)
+				tminx, tminy = self.geodetic.LatLonToTile(self.output_min_x, self.output_min_y, tz)
+				tmaxx, tmaxy = self.geodetic.LatLonToTile(self.output_max_x, self.output_max_y, tz)
 				# crop tiles extending world limits (+-180,+-90)
 				tminx, tminy = max(0, tminx), max(0, tminy)
 				tmaxx, tmaxy = min(2 ** (tz + 1) - 1, tmaxx), min(2 ** tz - 1, tmaxy)
@@ -1017,7 +1018,7 @@ gdal2tiles temp.vrt""" % self.input)
 				self.tile_max_z = self.geodetic.ZoomForPixelSize(self.out_gt[1])
 			
 			if self.options.verbose:
-				print("Bounds (latlong):", self.ominx, self.ominy, self.omaxx, self.omaxy)
+				print("Bounds (latlong):", self.output_min_x, self.output_min_y, self.output_max_x, self.output_max_y)
 					
 		if self.options.profile == 'raster':
 			
@@ -1057,7 +1058,7 @@ gdal2tiles temp.vrt""" % self.input)
 					pixelsizey = (2 ** (self.tile_max_z - z) * self.out_gt[1])  # Y-pixel size in level (usually -1*pixelsizex)
 					west = self.out_gt[0] + x * self.tile_size * pixelsizex
 					east = west + self.tile_size * pixelsizex
-					south = self.ominy + y * self.tile_size * pixelsizex
+					south = self.output_min_y + y * self.tile_size * pixelsizex
 					north = south + self.tile_size * pixelsizex
 					if not self.is_epsg_4326:
 						# Transformation to EPSG:4326 (WGS84 datum)
@@ -1078,8 +1079,8 @@ gdal2tiles temp.vrt""" % self.input)
 
 		if self.options.profile == 'mercator':
 			
-			south, west = self.mercator.MetersToLatLon(self.ominx, self.ominy)
-			north, east = self.mercator.MetersToLatLon(self.omaxx, self.omaxy)
+			south, west = self.mercator.MetersToLatLon(self.output_min_x, self.output_min_y)
+			north, east = self.mercator.MetersToLatLon(self.output_max_x, self.output_max_y)
 			south, west = max(-85.05112878, south), max(-180.0, west)
 			north, east = min(85.05112878, north), min(180.0, east)
 			self.swne = (south, west, north, east)
@@ -1100,8 +1101,8 @@ gdal2tiles temp.vrt""" % self.input)
 
 		elif self.options.profile == 'geodetic':
 			
-			west, south = self.ominx, self.ominy
-			east, north = self.omaxx, self.omaxy
+			west, south = self.output_min_x, self.output_min_y
+			east, north = self.output_max_x, self.output_max_y
 			south, west = max(-90.0, south), max(-180.0, west)
 			north, east = min(90.0, north), min(180.0, east)
 			self.swne = (south, west, north, east)
@@ -1115,8 +1116,8 @@ gdal2tiles temp.vrt""" % self.input)
 
 		elif self.options.profile == 'raster':
 			
-			west, south = self.ominx, self.ominy
-			east, north = self.omaxx, self.omaxy
+			west, south = self.output_min_x, self.output_min_y
+			east, north = self.output_max_x, self.output_max_y
 
 			self.swne = (south, west, north, east)
 			
