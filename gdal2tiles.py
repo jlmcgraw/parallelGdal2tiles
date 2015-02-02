@@ -746,6 +746,7 @@ gdal_translate -of vrt -expand rgba %s temp.vrt
 then run:
 gdal2tiles temp.vrt""" % self.input)
 
+
 		# Get NODATA value(s)
 		self.in_nodata = []
 		for i in range(1, self.in_ds.RasterCount + 1):
@@ -923,20 +924,18 @@ gdal2tiles temp.vrt""" % self.input)
 
 		self.out_gt = self.out_ds.GetGeoTransform()
 			
-		self.originX, self.originY = self.out_gt[0], self.out_gt[3]
-		self.pixelSizeX, self.pixelSizeY = self.out_gt[1],self.out_gt[5]
-		self.pixelSkewX, self.pixelSkewY = self.out_gt[2], self.out_gt[4]
-		print self.originX, self.originY, self.pixelSizeX, self.pixelSizeY, self.pixelSkewX, self.pixelSkewY
+		originX, originY = self.out_gt[0], self.out_gt[3]
+		pixelSizeX, pixelSizeY = self.out_gt[1],self.out_gt[5]
+		pixelSkewX, pixelSkewY = self.out_gt[2], self.out_gt[4]
+		print originX, originY, pixelSizeX, pixelSizeY, pixelSkewX, pixelSkewY
 		
-		# Test the size of the pixel
-		
-		# MAPTILER - COMMENTED
-		# if self.out_gt[1] != (-1 * self.out_gt[5]) and self.options.profile != 'raster':
+		# Test the size of the pixel		
+		if pixelSizeX != (-1 * pixelSizeY) and self.options.profile != 'raster':
 			# TODO: Process corectly coordinates with are have swichted Y axis (display in OpenLayers too)
-			# self.error("Size of the pixel in the output differ for X and Y axes.")
+			self.error("Size of the pixel in the output differ for X and Y axes.")
 			
 		# Report error in case rotation/skew is in geotransform (possible only in 'raster' profile)
-		if (self.out_gt[2], self.out_gt[4]) != (0, 0):
+		if (pixelSkewX, pixelSkewY) != (0, 0):
 			self.error("Georeference of the raster contains rotation or skew. Such raster is not supported. Please use gdalwarp first.")
 			# TODO: Do the warping in this case automaticaly
 
@@ -945,10 +944,11 @@ gdal2tiles temp.vrt""" % self.input)
 		#
 
 		# Output Bounds - coordinates in the output SRS
-		self.output_min_x = self.originX
-		self.output_max_x = self.originX + (self.out_ds.RasterXSize * self.pixelSizeX)
-		self.output_max_y = self.out_gt[3]
-		self.output_min_y = self.out_gt[3] - self.out_ds.RasterYSize * self.out_gt[1]
+		self.output_min_x = originX
+		self.output_max_x = originX + (self.out_ds.RasterXSize * pixelSizeX)
+		self.output_max_y = originY
+		#Remember that pixelSizeY is negative
+		self.output_min_y = originY + (self.out_ds.RasterYSize * pixelSizeY)
 		# Note: maybe round(x, 14) to avoid the gdal_translate behaviour, when 0 becomes -1e-15
 
 		if self.options.verbose:
@@ -979,11 +979,11 @@ gdal2tiles temp.vrt""" % self.input)
 
 			# Get the minimal zoom level (map covers area equivalent to one tile) 
 			if self.tile_min_z == None:
-				self.tile_min_z = self.mercator.ZoomForPixelSize(self.out_gt[1] * max(self.out_ds.RasterXSize, self.out_ds.RasterYSize) / float(self.tile_size))
+				self.tile_min_z = self.mercator.ZoomForPixelSize(pixelSizeX * max(self.out_ds.RasterXSize, self.out_ds.RasterYSize) / float(self.tile_size))
 
 			# Get the maximal zoom level (closest possible zoom level up on the resolution of raster)
 			if self.tile_max_z == None:
-				self.tile_max_z = self.mercator.ZoomForPixelSize(self.out_gt[1])
+				self.tile_max_z = self.mercator.ZoomForPixelSize(pixelSizeX)
 			
 			if self.options.verbose:
 				print("Bounds (latlong):", self.mercator.MetersToLatLon(self.output_min_x, self.output_min_y), self.mercator.MetersToLatLon(self.output_max_x, self.output_max_y))
@@ -1164,9 +1164,9 @@ gdal2tiles temp.vrt""" % self.input)
 			print('')
 
 
-		# Set the bounds
+		# Set the bounds from our array of tile coordinates at the maximum zoom for this raster
 		tminx, tminy, tmaxx, tmaxy = self.tminmax[self.tile_max_z]
-
+		print tminx, tminy, tmaxx, tmaxy
 		# Just the center tile
 		# tminx = tminx+ (tmaxx - tminx)/2
 		# tminy = tminy+ (tmaxy - tminy)/2
@@ -1183,7 +1183,7 @@ gdal2tiles temp.vrt""" % self.input)
 		
 		# print tminx, tminy, tmaxx, tmaxy
 		tcount = (1 + abs(tmaxx - tminx)) * (1 + abs(tmaxy - tminy))
-		# print tcount
+		print ("Total of %s tiles at zoom level %s: " ,tcount, self.tile_max_z)
 		ti = 0
 		
 		tz = self.tile_max_z
@@ -1193,16 +1193,19 @@ gdal2tiles temp.vrt""" % self.input)
 				if self.stopped:
 					break
 				ti += 1
+				#This is how we assign tiles to the various CPUs
 				if (ti - 1) % self.options.processes != cpu:
 					continue
 				tilefilename = os.path.join(self.output, str(tz), str(tx), "%s.%s" % (ty, self.tile_ext))
 				if self.options.verbose:
 					print(ti, '/', tcount, tilefilename)  # , "( TileMapService: z / x / y )"
-
+				
+				#Does this tile already exist in the file system?	
 				if self.options.resume and os.path.exists(tilefilename):
 					if self.options.verbose:
 						print("Tile generation skiped because of --resume")
 					else:
+						#Update our progress queue
 						queue.put(tcount)
 					continue
 
@@ -1215,7 +1218,10 @@ gdal2tiles temp.vrt""" % self.input)
 					b = self.mercator.TileBounds(tx, ty, tz)
 				elif self.options.profile == 'geodetic':
 					b = self.geodetic.TileBounds(tx, ty, tz)
-
+				
+				#b is tile bounds in output SRS (eg meters)
+				#[minX, minY, maxX, maxY]
+				#print ("Tile bounds: ", b)
 				# print "\tgdalwarp -ts 256 256 -te %s %s %s %s %s %s_%s_%s.tif" % ( b[0], b[1], b[2], b[3], "tiles.vrt", tz, tx, ty)
 
 				# Don't scale up by nearest neighbour, better change the query_size
@@ -1223,6 +1229,7 @@ gdal2tiles temp.vrt""" % self.input)
 
 				if self.options.profile in ('mercator', 'geodetic'):
 					rb, wb = self.geo_query(ds, b[0], b[3], b[2], b[1])
+					
 					nativesize = wb[0] + wb[2]  # Pixel size in the raster covering query geo extent
 					if self.options.verbose:
 						print("\tNative Extent (query_size", nativesize, "): ", rb, wb)
@@ -1259,6 +1266,8 @@ gdal2tiles temp.vrt""" % self.input)
 					wxsize, wysize = int(rxsize / float(tsize) * self.tile_size), int(rysize / float(tsize) * self.tile_size)
 					if wysize != self.tile_size:
 						wy = self.tile_size - wysize
+				print ("Raster bounds ", rb)
+				print ("World bounds ", wb)
 					
 				if self.options.verbose:
 					print("\tReadRaster Extent: ", (rx, ry, rxsize, rysize), (wx, wy, wxsize, wysize))
@@ -1267,11 +1276,14 @@ gdal2tiles temp.vrt""" % self.input)
 				# We scale down the query to the tile_size by supplied algorithm.
 
 				# Tile dataset in memory
+				#I believe the wxsize and wysize are what cause the resampling
 				dstile = self.mem_drv.Create('', self.tile_size, self.tile_size, tilebands)
 				data = ds.ReadRaster(rx, ry, rxsize, rysize, wxsize, wysize, band_list=list(range(1, self.data_bands_count + 1)))
 				alpha = self.alpha_band.ReadRaster(rx, ry, rxsize, rysize, wxsize, wysize)
-
+				print ("rxsize, rysize" , rxsize, rysize)
+				print ("Tile and query size" ,self.tile_size , querysize)
 				if self.tile_size == querysize:
+					print "Tile size equal to query size"
 					# Use the ReadRaster result directly in tiles ('nearest neighbour' query)
 					dstile.WriteRaster(wx, wy, wxsize, wysize, data, band_list=list(range(1, self.data_bands_count + 1)))
 					dstile.WriteRaster(wx, wy, wxsize, wysize, alpha, band_list=[tilebands])
@@ -1280,6 +1292,7 @@ gdal2tiles temp.vrt""" % self.input)
 					# the ReadRaster function returns high-quality raster (not ugly nearest neighbour)
 					# TODO: Use directly 'near' for WaveLet files
 				else:
+					#print "Tile size not equal to query size"
 					# Big ReadRaster query in memory scaled to the tile_size - all but 'near' algo
 					dsquery = self.mem_drv.Create('', querysize, querysize, tilebands)
 					# TODO: fill the null value in case a tile without alpha is produced (now only png tiles are supported)
@@ -1292,6 +1305,8 @@ gdal2tiles temp.vrt""" % self.input)
 					del dsquery
 
 				del data
+				#I don't know if this is necessary?
+				del alpha
 
 				if self.options.resampling != 'antialias':
 					# Write a copy of tile to png/jpg
@@ -1328,6 +1343,8 @@ gdal2tiles temp.vrt""" % self.input)
 		# query_size = tile_size * 2
 		
 		tminx, tminy, tmaxx, tmaxy = self.tminmax[tz]
+		print tminx, tminy, tmaxx, tmaxy
+		
 		for ty in range(tmaxy, tminy - 1, -1):  # range(tminy, tmaxy+1):
 			for tx in range(tminx, tmaxx + 1):
 				
