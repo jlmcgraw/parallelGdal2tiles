@@ -212,7 +212,7 @@ class GlobalMercator(object):
 		# 20037508.342789244
 
 	def LatLonToMeters(self, lat, lon):
-		"Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:900913"
+		"Converts given lat/lon in WGS84 Datum to XY in Spherical Mercator EPSG:3857"
 
 		mx = lon * self.originShift / 180.0
 		my = math.log(math.tan((90 + lat) * math.pi / 360.0)) / (math.pi / 180.0)
@@ -221,7 +221,7 @@ class GlobalMercator(object):
 		return mx, my
 
 	def MetersToLatLon(self, mx, my):
-		"Converts XY point from Spherical Mercator EPSG:900913 to lat/lon in WGS84 Datum"
+		"Converts XY point from Spherical Mercator EPSG:3857 to lat/lon in WGS84 Datum"
 
 		lon = (mx / self.originShift) * 180.0
 		lat = (my / self.originShift) * 180.0
@@ -230,7 +230,7 @@ class GlobalMercator(object):
 		return lat, lon
 
 	def PixelsToMeters(self, px, py, zoom):
-		"Converts pixel coordinates in given zoom level of pyramid to EPSG:900913"
+		"Converts pixel coordinates in given zoom level of pyramid to EPSG:3857"
 
 		res = self.Resolution(zoom)
 		mx = px * res - self.originShift
@@ -238,7 +238,7 @@ class GlobalMercator(object):
 		return mx, my
 		
 	def MetersToPixels(self, mx, my, zoom):
-		"Converts EPSG:900913 to pyramid pixel coordinates in given zoom level"
+		"Converts EPSG:3857 to pyramid pixel coordinates in given zoom level"
 				
 		res = self.Resolution(zoom)
 		px = (mx + self.originShift) / res
@@ -265,7 +265,7 @@ class GlobalMercator(object):
 		return self.PixelsToTile(px, py)
 
 	def TileBounds(self, tx, ty, zoom):
-		"Returns bounds of the given tile in EPSG:900913 coordinates"
+		"Returns bounds of the given tile in EPSG:3857 coordinates"
 		
 		minx, miny = self.PixelsToMeters(tx * self.tileSize, ty * self.tileSize, zoom)
 		maxx, maxy = self.PixelsToMeters((tx + 1) * self.tileSize, (ty + 1) * self.tileSize, zoom)
@@ -790,7 +790,7 @@ gdal2tiles temp.vrt""" % self.input)
 		self.out_srs = osr.SpatialReference()
 
 		if self.options.profile == 'mercator':
-			self.out_srs.ImportFromEPSG(900913)
+			self.out_srs.ImportFromEPSG(3857)
 		elif self.options.profile == 'geodetic':
 			self.out_srs.ImportFromEPSG(4326)
 		else:
@@ -1151,7 +1151,7 @@ gdal2tiles temp.vrt""" % self.input)
 		self.out_srs = osr.SpatialReference()
 
 		if self.options.profile == 'mercator':
-			self.out_srs.ImportFromEPSG(900913)
+			self.out_srs.ImportFromEPSG(3857)
 		elif self.options.profile == 'geodetic':
 			self.out_srs.ImportFromEPSG(4326)
 		else:
@@ -1473,7 +1473,7 @@ gdal2tiles temp.vrt""" % self.input)
 					os.makedirs(os.path.dirname(tilefilename))
 
 				if self.options.profile == 'mercator':
-					# Tile bounds in EPSG:900913
+					# Tile bounds in EPSG:3857
 					b = self.mercator.TileBounds(tx, ty, tz)
 				elif self.options.profile == 'geodetic':
 					b = self.geodetic.TileBounds(tx, ty, tz)
@@ -1769,7 +1769,7 @@ gdal2tiles temp.vrt""" % self.input)
 		args['profile'] = self.options.profile
 		
 		if self.options.profile == 'mercator':
-			args['srs'] = "EPSG:900913"
+			args['srs'] = "EPSG:3857"
 		elif self.options.profile == 'geodetic':
 			args['srs'] = "EPSG:4326"
 		elif self.options.s_srs:
@@ -2268,7 +2268,7 @@ gdal2tiles temp.vrt""" % self.input)
 			s += """
 	            var options = {
 	                controls: [],
-	                projection: new OpenLayers.Projection("EPSG:900913"),
+	                projection: new OpenLayers.Projection("EPSG:3857"),
 	                displayProjection: new OpenLayers.Projection("EPSG:4326"),
 	                units: "m",
 	                maxResolution: 156543.0339,
@@ -2309,7 +2309,7 @@ gdal2tiles temp.vrt""" % self.input)
 	                "http://tile.openstreetmap.org/",
 	                { type: 'png', getURL: osm_getTileURL, displayOutsideMaxExtent: true, attribution: '<a href="http://www.openstreetmap.org/">OpenStreetMap</a>'} );
 	            var oam = new OpenLayers.Layer.TMS( "OpenAerialMap",
-	                "http://tile.openaerialmap.org/tiles/1.0.0/openaerialmap-900913/",
+	                "http://tile.openaerialmap.org/tiles/1.0.0/openaerialmap-3857/",
 	                { type: 'png', getURL: osm_getTileURL } );
 
 	            // create TMS Overlay layer
@@ -2522,19 +2522,26 @@ def worker_overview_tiles(argv, cpu, tz):
 	gdal2tiles.open_input()
 	gdal2tiles.generate_overview_tiles(cpu, tz)
 
+def optimumZoomRange(argv):
+	#This is just a silly hack since I don't yet understand python multithreading
+	gdal2tiles = GDAL2Tiles(argv[1:])
+	gdal2tiles.open_input()
+	return gdal2tiles.tminz, gdal2tiles.tmaxz
+	
 if __name__ == '__main__':
 	argv = gdal.GeneralCmdLineProcessor(sys.argv)
 	if argv:
 		gdal2tiles = GDAL2Tiles(argv[1:])  # handle command line options
-		gdal2tiles.open_inputJM()
 		
+		print("Generating Metadata:")
 		p = multiprocessing.Process(target=worker_metadata, args=[argv])
 		p.start()
 		p.join()
 
+		print("Generating Base Tiles:")
 		pool = multiprocessing.Pool()
 		processed_tiles = 0
-		print("Generating Base Tiles:")
+
 		for cpu in range(gdal2tiles.options.processes):
 			pool.apply_async(worker_base_tiles, [argv, cpu])
 		pool.close()
@@ -2548,10 +2555,12 @@ if __name__ == '__main__':
 				pass
 		pool.join()
 
-		processed_tiles = 0
 		print("Generating Overview Tiles:")
-		print gdal2tiles.tmaxz - 1, gdal2tiles.tminz - 1
-		for tz in range(gdal2tiles.tmaxz - 1, gdal2tiles.tminz - 1, -1):
+		processed_tiles = 0
+		#A quick hack to restore the missing functionality of determining a default zoom range		
+		minZ, maxZ = optimumZoomRange(argv)
+
+		for tz in range(maxZ - 1, minZ - 1, -1):
 			pool = multiprocessing.Pool()
 			for cpu in range(gdal2tiles.options.processes):
 				pool.apply_async(worker_overview_tiles, [argv, cpu, tz])
