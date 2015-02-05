@@ -1196,11 +1196,14 @@ gdal2tiles temp.vrt""" % self.input)
 
 				if self.stopped:
 					break
+				
 				tile_index += 1
+				
 				#This is how we assign tiles to the available CPUs
 				if (tile_index - 1) % self.options.processes != cpu:
 					continue
 				
+				#Create the filename for this tile
 				tilefilename = os.path.join(self.output, str(this_tile_z), str(this_tile_x), "%s.%s" % (this_tile_y, self.tile_ext))
 				if self.options.verbose:
 					print(tile_index, '/', total_tiles_count, tilefilename)  # , "( TileMapService: z / x / y )"
@@ -1208,7 +1211,7 @@ gdal2tiles temp.vrt""" % self.input)
 				#Does this tile already exist in the file system?	
 				if self.options.resume and os.path.exists(tilefilename):
 					if self.options.verbose:
-						print("Tile generation skiped because of --resume option")
+						print("Skipped re-creating existing tile because of --resume option")
 					else:
 						#Update our progress queue
 						queue.put(total_tiles_count)
@@ -1220,27 +1223,27 @@ gdal2tiles temp.vrt""" % self.input)
 				
 				#Get the bounds of this tile in the appropriate SRS
 				if self.options.profile == 'mercator':					
-					b = self.mercator.TileBounds(this_tile_x, this_tile_y, this_tile_z)
+					tile_bounds = self.mercator.TileBounds(this_tile_x, this_tile_y, this_tile_z)
 				elif self.options.profile == 'geodetic':
-					b = self.geodetic.TileBounds(this_tile_x, this_tile_y, this_tile_z)
+					tile_bounds = self.geodetic.TileBounds(this_tile_x, this_tile_y, this_tile_z)
 				
-				#b is tile bounds in output SRS (eg meters)
+				#tile_bounds is tile bounds in output SRS (eg meters)
 				#[minX, minY, maxX, maxY]
-				#print ("Tile bounds: ", b)
-				# print "\tgdalwarp -ts 256 256 -te %s %s %s %s %s %s_%s_%s.tif" % ( b[0], b[1], b[2], b[3], "tiles.vrt", this_tile_z, this_tile_x, this_tile_y)
+				#print ("Tile bounds: ", tile_bounds)
+				# print "\tgdalwarp -ts 256 256 -te %s %s %s %s %s %s_%s_%s.tif" % ( tile_bounds[0], tile_bounds[1], tile_bounds[2], tile_bounds[3], "tiles.vrt", this_tile_z, this_tile_x, this_tile_y)
 
 				# Don't scale up by nearest neighbour, better change the query_size
 				# to the native resolution (and return smaller query tile) for scaling
 
 				if self.options.profile in ('mercator', 'geodetic'):
-					rb, wb = self.geo_query(ds, b[0], b[3], b[2], b[1])
+					rb, wb = self.geo_query(ds, tile_bounds[0], tile_bounds[3], tile_bounds[2], tile_bounds[1])
 					
 					nativesize = wb[0] + wb[2]  # Pixel size in the raster covering query geo extent
 					if self.options.verbose:
 						print("\tNative Extent (query_size", nativesize, "): ", rb, wb)
 
 					# Tile bounds in raster coordinates for ReadRaster query
-					rb, wb = self.geo_query(ds, b[0], b[3], b[2], b[1], querysize=querysize)
+					rb, wb = self.geo_query(ds, tile_bounds[0], tile_bounds[3], tile_bounds[2], tile_bounds[1], querysize=querysize)
 
 					rx, ry, rxsize, rysize = rb
 					wx, wy, wxsize, wysize = wb
@@ -1271,9 +1274,7 @@ gdal2tiles temp.vrt""" % self.input)
 					wxsize, wysize = int(rxsize / float(tsize) * self.tile_size), int(rysize / float(tsize) * self.tile_size)
 					if wysize != self.tile_size:
 						wy = self.tile_size - wysize
-				#print ("Raster bounds ", rb)
-				#print ("World bounds ", wb)
-					
+						
 				if self.options.verbose:
 					print("\tReadRaster Extent: ", (rx, ry, rxsize, rysize), (wx, wy, wxsize, wysize))
 					
@@ -1282,7 +1283,7 @@ gdal2tiles temp.vrt""" % self.input)
 
 				# Tile dataset in memory
 				#I believe the wxsize and wysize are what cause the resampling since they are the buffer size?
-				dstile = self.mem_drv.Create('', self.tile_size, self.tile_size, tile_bands)
+				ds_tile = self.mem_drv.Create('', self.tile_size, self.tile_size, tile_bands)
 				data = ds.ReadRaster(rx, ry, rxsize, rysize, wxsize, wysize, band_list=list(range(1, self.data_bands_count + 1)))
 				alpha = self.alpha_band.ReadRaster(rx, ry, rxsize, rysize, wxsize, wysize)
 				#print ("rxsize, rysize" , rxsize, rysize)
@@ -1291,8 +1292,8 @@ gdal2tiles temp.vrt""" % self.input)
 				if self.tile_size == querysize:
 					#print "Tile size equal to query size"
 					# Use the ReadRaster result directly in tiles ('nearest neighbour' query)
-					dstile.WriteRaster(wx, wy, wxsize, wysize, data, band_list=list(range(1, self.data_bands_count + 1)))
-					dstile.WriteRaster(wx, wy, wxsize, wysize, alpha, band_list=[tile_bands])
+					ds_tile.WriteRaster(wx, wy, wxsize, wysize, data, band_list=list(range(1, self.data_bands_count + 1)))
+					ds_tile.WriteRaster(wx, wy, wxsize, wysize, alpha, band_list=[tile_bands])
 
 					# Note: For source drivers based on WaveLet compression (JPEG2000, ECW, MrSID)
 					# the ReadRaster function returns high-quality raster (not ugly nearest neighbour)
@@ -1300,26 +1301,26 @@ gdal2tiles temp.vrt""" % self.input)
 				else:
 					#print "Tile size not equal to query size"
 					# Big ReadRaster query in memory scaled to the tile_size - all but 'near' algo
-					dsquery = self.mem_drv.Create('', querysize, querysize, tile_bands)
+					ds_query = self.mem_drv.Create('', querysize, querysize, tile_bands)
 					# TODO: fill the null value in case a tile without alpha is produced (now only png tiles are supported)
 					# for i in range(1, tile_bands+1):
-					# 	dsquery.GetRasterBand(1).Fill(tilenodata)
-					dsquery.WriteRaster(wx, wy, wxsize, wysize, data, band_list=list(range(1, self.data_bands_count + 1)))
-					dsquery.WriteRaster(wx, wy, wxsize, wysize, alpha, band_list=[tile_bands])
+					# 	ds_query.GetRasterBand(1).Fill(tilenodata)
+					ds_query.WriteRaster(wx, wy, wxsize, wysize, data, band_list=list(range(1, self.data_bands_count + 1)))
+					ds_query.WriteRaster(wx, wy, wxsize, wysize, alpha, band_list=[tile_bands])
 					
 					#This scales the queried data down to the tile's size (using supplied method)
-					self.scale_query_to_tile(dsquery, dstile, tilefilename)
-					del dsquery
+					self.scale_query_to_tile(ds_query, ds_tile, tilefilename)
+					del ds_query
 
 				del data
-				#I don't know if this is necessary?
+				#BUG TODO I don't know if this is necessary but since we're deleting others it seems like a good idea
 				del alpha
 
 				if self.options.resampling != 'antialias':
 					# Write a copy of tile to png/jpg
-					self.out_drv.CreateCopy(tilefilename, dstile, strict=0)
+					self.out_drv.CreateCopy(tilefilename, ds_tile, strict=0)
 
-				del dstile
+				del ds_tile
 
 				# Create a KML file for this tile.
 				if self.kml:
@@ -1328,7 +1329,8 @@ gdal2tiles temp.vrt""" % self.input)
 						f = open(kmlfilename, 'w')
 						f.write(self.generate_kml(this_tile_x, this_tile_y, this_tile_z))
 						f.close()
-					
+				
+				#Update our progress meter if we're not in verbose mode	
 				if not self.options.verbose:
 					queue.put(total_tiles_count)
 		
